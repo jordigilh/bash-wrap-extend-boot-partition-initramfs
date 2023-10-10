@@ -4,7 +4,6 @@
 EXTEND_DEVICE_PARAM="extend.device"
 EXTEND_SIZE_PARAM="extend.size"
 BOOT_PARTITION_FLAG="boot"
-TARGET_MOUNT="/tmp/boot-"$RANDOM
 
 #variables
 EXTEND_DEVICE=
@@ -29,10 +28,17 @@ function get_boot_partition_number() {
     fi
 }
 
-function mount_boot_partition(){
-    get_boot_partition_number
-    /usr/bin/mkdir -p "$TARGET_MOUNT"
-    /usr/bin/mount "$EXTEND_DEVICE""$BOOT_PARTITION_NUMBER" "$TARGET_MOUNT"
+function disable_lvm_lock(){
+    tmpfile=$(/usr/bin/mktemp)
+    sed -e 's/\(^[[:space:]]*\)locking_type[[:space:]]*=[[:space:]]*[[:digit:]]/\1locking_type = 1/' /etc/lvm/lvm.conf >"$tmpfile"
+    status=$?
+    if [[ status -ne 0 ]]; then
+     echo "Failed to disable lvm lock: $status"
+     return $status
+    fi
+    # replace lvm.conf. There is no need to keep a backup since it's an ephemeral file, we are not replacing the original in the initramfs image file
+    mv "$tmpfile" /etc/lvm/lvm.conf
+    return $status
 }
 
 function parse_kernelops(){
@@ -48,34 +54,32 @@ function parse_kernelops(){
 
     if [[ -z "$EXTEND_DEVICE" ]] && [[ -z "$EXTEND_SIZE" ]]; then
         echo "Unable to find required parameters $EXTEND_DEVICE_PARAM and $EXTEND_SIZE_PARAM in cmdline: ${array[*]}"
-        exit 1
+        return 1
     fi
+    return 0
 }
 
 function main() {
     current_dir=$(dirname "$0")
     start=$(/usr/bin/date +%s)
-    parse_kernelops
-    # run extend.sh to increase boot partition and file system size
-    ret=$("$current_dir"/extend.sh "$EXTEND_DEVICE" "$EXTEND_SIZE")
+    ret=$(parse_kernelops)
     status=$?
+    if [[ status -eq 0 ]]; then
+        ret=$(disable_lvm_lock)
+        status=$?
+        if [[ status -eq 0 ]]; then
+            # run extend.sh to increase boot partition and file system size
+            ret=$("$current_dir"/extend.sh "$EXTEND_DEVICE" "$EXTEND_SIZE")
+            status=$?
+        fi
+    fi
     end=$(/usr/bin/date +%s)
-    # mount the boot partition from the device
-    mount_boot_partition
     # write the log file
     if [[ $status -eq 0 ]]; then
-        echo "["$((end-start))" seconds] Boot partition successfully extended" >"$TARGET_MOUNT"/extend.log
+        echo "[$(basename "$0")] Boot partition $EXTEND_DEVICE$BOOT_PARTITION_NUMBER successfully extended by $EXTEND_SIZE ("$((end-start))" seconds) " >/dev/kmsg
     else
-        echo "["$((end-start))" seconds] Boot partition failed to extend: $ret">"$TARGET_MOUNT"/extend.log
+        echo "[$(basename "$0")] Failed to extend boot partition: $ret ("$((end-start))" seconds)" >/dev/kmsg
     fi
-    # move old initramfs back
-    kernel_version=$(/usr/bin/uname -r)
-    old_initramfs=$(ls $TARGET_MOUNT/initramfs-"$kernel_version".img.old)
-    if [[ -n "$old_initramfs" ]]; then
-        mv -f "$old_initramfs" "${old_initramfs/.old/}"
-    fi
-    # reboot
-    /usr/sbin/reboot
 }
 
 main "$0"
