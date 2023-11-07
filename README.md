@@ -1,2 +1,3 @@
 # bash-wrap-extend-boot-partition-initramfs
-Bash script that wraps the extend boot partition to run during the pre-mount phase in the initramfs
+Bash script that wraps the extend boot partition script to run during the pre-mount phase in the initramfs. It retrieves the device name (`extend.device`) and the size (`extend.size`) to extend from the kernel options and calls the [extend boot partition](https://github.com/jordigilh/bash-extend-boot-partition) script to perform the operation.
+It creates a file in the boot partition of the target device where it stores the results of the `extend` operation. The file `extend.log` contains the time it took to complete and the success/failure result, with failure including the error message resulting from executing the `extend.sh` script.
